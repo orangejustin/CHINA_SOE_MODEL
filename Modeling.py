@@ -3,6 +3,7 @@ from googletrans import Translator
 from pandas.api.types import is_numeric_dtype
 import numpy as np
 import re
+import json
 
 
 class soeModel:
@@ -11,6 +12,7 @@ class soeModel:
         upload raw data
         """
         # coal types
+        self.data = None
         power_sale = "raw data/Power Sale.csv"
         power_cost = "raw data/Power Costs.csv"
         elec_cost = "raw data/Electricity Costs.csv"
@@ -24,9 +26,9 @@ class soeModel:
 
     def preprocessing(self):
         """
-        preprocessing of the df
-        :param df:
-        :return:
+        Preprocessing of the dataframe
+        :param df: pandas DataFrame
+        :return: preprocessed dataframe
         """
         for i in self.df_lst:
             df = eval('self.' + i)
@@ -45,35 +47,73 @@ class soeModel:
 
         return self
 
-    def translate_col(self):
-        for i in self.df_lst:
-            df = eval('self.' + i)
-            translator = Translator()
-            translate_list = []
-            for col in df.columns:
-                translate_list.append(translator.translate(col).text)
-            # update
-            df.columns = translate_list
+    def preprocessing_2(self, df):
+        df = df.T.reset_index(drop=True)
+        df.columns = df.loc[0].fillna(method='ffill').fillna('year')
+        df.drop(index=[0], inplace=True)
+        df['year'] = df['year'].astype(str)
+        # apply regex and remove '\n(百万元)' from the 'year' column
+        df['year'] = df['year'].str.replace('\n(百万元)', '', regex=True)
+        # extract year digits using regex
+        df['year'] = df['year'].apply(lambda s: re.findall('\d{4}', s)[0])
+        df['year'] = df['year'].astype(int)
+        return df
 
-        return self
+    def translate_cells(self, local_dict_name, local):
+        # store a local translation dict
+        try:
+            with open(local_dict_name, "r") as f:
+                translations_all = json.load(f)
+        except FileNotFoundError:
+            translations_all = {}
 
-    def translate_cells(self):
+        # derive from local
+        if local:
+            for i in self.df_lst:
+                df = eval('self.' + i)
+                # update
+                df.replace(translations_all, inplace=True)
+                df.rename(columns=translations_all, inplace=True)
+            return self
+
+        regex = re.compile(r'^[-+]?\d{1,3}(?:,?\d{3})*(?:\.\d+)?$')
+
+        # else perform translate
         for i in self.df_lst:
             df = eval('self.' + i)
             translations = {}
             translator = Translator()
             for column in df.columns:
+                if column not in translations_all:
+                    translations[column] = translator.translate(column).text.strip()
                 # unique elements of the column
                 # exclude numeric numbers
                 if '20' in column:
                     continue
                 unique_elements = df[column].unique()
                 for element in unique_elements:
+                    if element in translations_all:
+                        continue
+                    # if digit types
+                    if regex.match(element):
+                        continue
                     # add translation to the dictionary
                     translations[element] = translator.translate(element).text.strip()
 
             # update
             df.replace(translations, inplace=True)
+            df.rename(columns=translations, inplace=True)
+            # df.columns = translate_list
+            translations_all.update(translations)
+
+
+        try:
+            with open(local_dict_name, "a") as f:
+                json.dump(translations_all, f)
+                f.write("\n")
+        except FileNotFoundError:
+            with open(local_dict_name, "w") as f:
+                json.dump(translations_all, f)
 
         return self
 
@@ -97,7 +137,6 @@ class soeModel:
                         continue
                     if is_numeric_dtype(df[col]):
                         continue
-                    print(col)
                     df[col] = df[col].str.replace(',', '')
                     # df[col] = df[col].apply(lambda x: ''.join(c for c in x if c.isdigit()))
                     df[col] = pd.to_numeric(df[col], errors='coerce')
@@ -108,70 +147,77 @@ class soeModel:
 
         return self
 
-    def scenario(self, types):
+    def scenario(self, types, pct, year, coal_price, coal_power, coal_purchase, coal_transportation):
         """
-        scenario cases function in the working paper
+        perform scenario tasks
 
-        :param types: select a type
-        :return: scenario case results
+        :param types: a string parameter that represents a type of scenario
+        :param pct: a float parameter that represents a percentage value that has been reduced
+        :param year: an integer parameter that represents a year
+        :param coal_price: a float parameter that represents the price of coal
+        :param coal_power: a boolean parameter that indicates whether coal power is being used
+        :param coal_purchase: a boolean parameter that indicates whether coal is being purchased
+        :param coal_transportation: a boolean parameter that indicates whether coal is being transported
+        :return: a scenario case dataframe
         """
-        if types == "power":
-            # All Power
-            electricity_sale_price = \
-                self.power_sale['Total electricity sales (100 million kWh) 2020'] / \
-                self.power_sale['Total electricity sales (100 million kWh) 2020'].sum() * \
-                self.power_sale['Electricity Sales Price (RMB/MWh) 2020']
 
-            # Estimated Sales Cost
-            sale_cost_lst = []
-            sale_cost = self.power_cost['Cost (RMB million) 2020'].sum() - \
-                        self.power_cost[self.power_cost['cost category'] == 'Maintenance fees'][
-                            'Cost (RMB million) 2020'].item() - \
-                        self.power_cost[self.power_cost['cost category'] == 'Other operating costs'][
-                            'Cost (RMB million) 2020'].item() - \
-                        self.power_cost[self.power_cost['cost category'] == 'Electricity cost'][
+        # if types == "power":
+        # All Power
+        electricity_sale_price = \
+            self.power_sale['Total electricity sales (100 million kWh) 2020'] / \
+            self.power_sale['Total electricity sales (100 million kWh) 2020'].sum() * \
+            self.power_sale['Electricity Sales Price (RMB/MWh) 2020']
+
+        # Estimated Sales Cost
+        sale_cost_lst = []
+        sale_cost = self.power_cost['Cost (RMB million) 2020'].sum() - \
+                    self.power_cost[self.power_cost['cost category'] == 'Maintenance fees'][
+                        'Cost (RMB million) 2020'].item() - \
+                    self.power_cost[self.power_cost['cost category'] == 'Other operating costs'][
+                        'Cost (RMB million) 2020'].item() - \
+                    self.power_cost[self.power_cost['cost category'] == 'Electricity cost'][
+                        'Cost (RMB million) 2020'].item()
+
+        sale_cost_lst.append(sale_cost)
+        coal_power_sc = self.elec_cost['Cost (RMB million) 2020'].sum() - \
+                        self.elec_cost[self.elec_cost['cost category'] == 'Maintenance fees'][
                             'Cost (RMB million) 2020'].item()
+        sale_cost_lst.append(coal_power_sc)
+        sale_cost_lst.append(sale_cost - coal_power_sc)
+        sale_cost_lst.append(sale_cost - coal_power_sc)
+        sale_cost_lst.append(0)
 
-            sale_cost_lst.append(sale_cost)
-            coal_power_sc = self.elec_cost['Cost (RMB million) 2020'].sum() - \
-                            self.elec_cost[self.elec_cost['cost category'] == 'Maintenance fees'][
-                                'Cost (RMB million) 2020'].item()
-            sale_cost_lst.append(coal_power_sc)
-            sale_cost_lst.append(sale_cost - coal_power_sc)
-            sale_cost_lst.append(sale_cost - coal_power_sc)
+        group = self.power_sale.groupby('Power Plant Classification')[
+            ['Total electricity sales (100 million kWh) 2020', 'Electricity Sales Price (RMB/MWh) 2020']]
 
+        coal_types_total = group.apply(lambda df: (df.sum()))
 
-            group = self.power_sale.groupby('Power Plant Classification')[
-                ['Total electricity sales (100 million kWh) 2020', 'Electricity Sales Price (RMB/MWh) 2020']]
+        power_dispatch = coal_types_total['Total electricity sales (100 million kWh) 2020'].values.tolist()
+        total_sales = coal_types_total['Total electricity sales (100 million kWh) 2020'].sum()
+        power_dispatch.insert(0, total_sales)
 
-            coal_types_total = group.apply(lambda df: (df.sum()))
+        weighted_average_tariff = group.apply(lambda df: (df['Total electricity sales (100 million kWh) 2020']
+                                                          / df[
+                                                              'Total electricity sales (100 million kWh) 2020'].sum()
+                                                          * df[
+                                                              'Electricity Sales Price (RMB/MWh) 2020']).sum()
+                                              ).values.tolist()
+        weighted_average_tariff.insert(0, electricity_sale_price.sum())
 
-            power_dispatch = coal_types_total['Total electricity sales (100 million kWh) 2020'].values.tolist()
-            total_sales = coal_types_total['Total electricity sales (100 million kWh) 2020'].sum()
-            power_dispatch.insert(0, total_sales)
+        forecasted_gross_profit = group.apply(lambda df: (df['Total electricity sales (100 million kWh) 2020'] *
+                                                          df['Electricity Sales Price (RMB/MWh) 2020'] / 10).sum()
+                                              )
+        forecasted_gross_profit_lst = forecasted_gross_profit.values.tolist()
+        forecasted_gross_profit_lst.insert(0, forecasted_gross_profit.sum())
 
-            weighted_average_tariff = group.apply(lambda df: (df['Total electricity sales (100 million kWh) 2020']
-                                                              / df[
-                                                                  'Total electricity sales (100 million kWh) 2020'].sum()
-                                                              * df[
-                                                                  'Electricity Sales Price (RMB/MWh) 2020']).sum()
-                                                  ).values.tolist()
-            weighted_average_tariff.insert(0, electricity_sale_price.sum())
+        lst1 = (np.array(forecasted_gross_profit_lst) - np.array(sale_cost_lst)).tolist()
+        lst1[2] = forecasted_gross_profit_lst[2] + forecasted_gross_profit_lst[3] - sale_cost_lst[2]
+        lst1[3] = lst1[2]
 
-            forecasted_gross_profit = group.apply(lambda df: (df['Total electricity sales (100 million kWh) 2020'] *
-                                                              df['Electricity Sales Price (RMB/MWh) 2020'] / 10).sum()
-                                                  )
-            forecasted_gross_profit_lst = forecasted_gross_profit.values.tolist()
-            forecasted_gross_profit_lst.insert(0, forecasted_gross_profit.sum())
+        # lst2 = ((np.array(forecasted_gross_profit_lst) - np.array(sale_cost_lst)) / (
+        #     np.array(forecasted_gross_profit_lst))).tolist()
 
-            lst1 = (np.array(forecasted_gross_profit_lst[:-1]) - np.array(sale_cost_lst)).tolist()
-            lst1.append(0)
-            lst2 = ((np.array(forecasted_gross_profit_lst[:-1]) - np.array(sale_cost_lst)) / (
-                np.array(forecasted_gross_profit_lst[:-1]))).tolist()
-
-            lst2.append(0)
-
-            sale_cost_lst.append(0)
+        lst2 = (np.array(lst1) / np.array(sale_cost_lst)).tolist()
 
         data = {
             'Power Dispatched (TWh)': power_dispatch,
@@ -183,4 +229,30 @@ class soeModel:
         }
         self.data = data
 
-        return pd.DataFrame(data)
+        table = pd.DataFrame(data)
+        table = table.drop(index=table.index[-1])
+        power_sources = ['All Power', 'Coal Power', 'Gas Power', 'Hydro Power']
+        table.set_index(pd.Index(power_sources), inplace=True)
+        table['Power Dispatched (TWh)'] = table['Power Dispatched (TWh)'] / 10
+        table['Gross Profitability'] = table['Gross Profitability'].apply(lambda x: '{:.2%}'.format(x))
+
+        # Estimated Revenue& Cost under different coal reduction scenario using 2020 data
+        value2 = table['Power Dispatched (TWh)']['Coal Power'] * (1 - pct) * \
+                 table['Weighted Average Tariff (RMB/MWh)']['Coal Power']
+
+        value3 = table['Power Dispatched (TWh)']['Coal Power'] * (1 - pct) + \
+                 self.elec_cost.set_index('cost category')['Unit cost (yuan/MWh) in 2020'][
+                     'Raw materials, fuels and power'] + \
+                 self.elec_cost.set_index('cost category')['Cost (RMB million) 2020']['Labor cost'] + \
+                 self.elec_cost.set_index('cost category')['Cost (RMB million) 2020']['Depreciation and amortization'] + \
+                 self.elec_cost.set_index('cost category')['Cost (RMB million) 2020']['other costs']
+        case = {
+            'Power Dispatched (TWh)': table['Power Dispatched (TWh)']['Coal Power'] * (1 - pct),
+            'Weighted Average Tariff (RMB/MWh)': table['Weighted Average Tariff (RMB/MWh)']['Coal Power'],
+            'Estimated Gross Revenue (RMB/MWh)': value2,
+            'Estimated Sales Cost (Million RMB)': value3,
+            'Gross Profit (Million RMB)': value2 - value3,
+            'Gross Profitability': (value2 - value3) / value3
+        }
+        self.case = case
+        return table
