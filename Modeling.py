@@ -13,6 +13,12 @@ class soeModel:
     # TODO: All table updated
     # TODO: Debugs for the error
 
+    # TODO: readable in the notebook.
+    # TODO: table, matrixc (varibles) over time (time series table over the years)
+
+    # TODO: Other SOEs.
+    # TODO: updated CSVs in folder.
+
     def __init__(self):
         """
         upload raw data
@@ -54,17 +60,104 @@ class soeModel:
 
         return self
 
-    def preprocessing_2(self, df):
-        df = df.T.reset_index(drop=True)
-        df.columns = df.loc[0].fillna(method='ffill').fillna('year')
-        df.drop(index=[0], inplace=True)
-        df['year'] = df['year'].astype(str)
-        # apply regex and remove '\n(百万元)' from the 'year' column
-        df['year'] = df['year'].str.replace('\n(百万元)', '', regex=True)
-        # extract year digits using regex
-        df['year'] = df['year'].apply(lambda s: re.findall('\d{4}', s)[0])
-        df['year'] = df['year'].astype(int)
-        return df
+    def preprocessing_2(self, is_cost):
+        for i in self.df_lst:
+            df = eval('self.' + i)
+            # column names reformatting
+            df.loc[0] = df.loc[0].str.extract(r'(\d{4})', expand=False).fillna(method='ffill')
+            df = df.fillna('')
+            df.iloc[1] = df.iloc[1].str.replace('\n', ' ').str.strip()
+            columns = df.iloc[1] + ' ' + df.iloc[0]
+
+            # if the data is a cost-related table
+            if is_cost:
+                columns = columns.replace(' ', '成本类别')
+            df.columns = columns
+
+            # drop the unnecessary rows
+            df = df.iloc[2:].reset_index(drop=True)
+            df.columns = [col.strip() for col in df.columns]
+
+            # Identify the columns containing a year in the first row
+            year_columns = [col for col in df.columns if re.search(r'\d{4}$', col)]
+            new_column_names = {col: re.sub(r'\s*\d{4}\s*$', '', col) for col in df.columns}
+            # Preprocessing translate to the time-series panel data
+            for col in year_columns:
+                match = re.search(r'\d{4}', col)
+                year = match.group(0)
+                df[col] = df[col].apply(lambda x: str(x) + '!' + str(year))
+                # If Cost Category
+                if is_cost:
+                    df[col] = df['成本类别'] + '!' + df[col]
+                # if power sale
+                else:
+                    df[col] = df['电厂分类'] + '!' + df['电厂'] + '!' + df['所在电网'] + '!' + df['地理位置'] + '!' + \
+                              df[
+                                  col]
+
+            # Drop and will be adding back afterward
+            if is_cost:
+                df.drop(['成本类别'], axis=1, inplace=True)
+            else:
+                df.drop(['电厂分类', '电厂', '所在电网', '地理位置'], axis=1, inplace=True)
+
+            # Rename the cok
+            df.rename(columns=new_column_names, inplace=True)
+            # Drop the unnecessary columns
+            if not is_cost:
+                df.drop(['预测毛利润 (百万元)', '计算I38中的加权平均售电电价', '计算Q38中的加权平均售电电价'], axis=1,
+                        inplace=True)
+            # Get unique column names
+            unique_columns = df.columns.unique()
+
+            # Create an empty DataFrame to store the concatenated columns
+            concatenated_df = pd.DataFrame()
+
+            # Loop through unique column names and concatenate the columns vertically
+            for unique_col in unique_columns:
+                # Create an empty list to store values
+                values = []
+
+                # Loop through columns with the same name
+                for col in df.columns[df.columns == unique_col]:
+                    # Extend the values list with non-NaN values from the column
+                    values.extend(df[col].values.tolist())
+
+                # Flatten the nested list
+                if len(values) != 1:
+                    values = [item for sublist in values for item in sublist]
+
+                # Add the values list as a column in the concatenated DataFrame
+                concatenated_df[unique_col] = pd.Series(values)
+
+            # Replace the original DataFrame with the concatenated one
+            df = concatenated_df
+
+            # Formal step of translating to the time-series panel data
+            for unique_col in unique_columns:
+                if is_cost:
+                    df[['成本类别', unique_col, '年份']] = df[unique_col].str.split('!', expand=True)
+                else:
+                    df[['电厂分类', '电厂', '所在电网', '地理位置', unique_col, '年份']] = df[unique_col].str.split('!', expand=True)
+
+            # let cost category as the first column
+            if is_cost:
+                columns_to_move = '成本类别'
+                cols = df.columns.tolist()
+                cols.insert(0, cols.pop(cols.index(columns_to_move)))
+                df = df[cols].sort_values(by=['年份']).reset_index(drop=True)
+            # power sale
+            else:
+                columns_to_move = ['电厂分类', '电厂', '所在电网', '地理位置']
+                # Reorder columns by moving the specified columns to the front
+                new_columns = columns_to_move + [col for col in df.columns if col not in columns_to_move]
+                # Update the DataFrame with the new column order
+                df = df[new_columns].sort_values(by=['年份']).reset_index(drop=True)
+
+            # Empty Values processing
+            df.replace(['-', '/', '  -   ', ' – ', ''], np.nan, inplace=True)
+
+        return self
 
     def translate_cells(self, local_dict_name, local):
         # store a local translation dict
