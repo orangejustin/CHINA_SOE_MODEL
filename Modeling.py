@@ -4,6 +4,7 @@ from pandas.api.types import is_numeric_dtype
 import numpy as np
 import re
 import json
+from IPython.display import display, Markdown
 
 
 class soeModel:
@@ -24,15 +25,27 @@ class soeModel:
         upload raw data
         """
         # coal types
-        self.case = None
-        self.data = None
+        self.preprocessed = False
+        self.translated = False
+        self.correct = False
+
         power_sale = "raw data/Power Sale.csv"
         power_cost = "raw data/Power Costs.csv"
         elec_cost = "raw data/Electricity Costs.csv"
+        # by coal types
+        coal_oper = "raw data/Coal Operation Data.csv"
+        coal_seg = "raw data/Coal segment operating costs.csv"
+        coal_sale = "raw data/Coal sales price.csv"
 
         self.power_sale = pd.read_csv(power_sale, header=None)
         self.power_cost = pd.read_csv(power_cost, header=None)
         self.elec_cost = pd.read_csv(elec_cost, header=None)
+        # new
+        self.coal_oper = pd.read_csv(coal_oper, header=None)
+        self.coal_seg = pd.read_csv(coal_seg, header=None)
+        self.coal_sale = pd.read_csv(coal_sale, header=None)
+
+
 
         # self.df_lst = [self.power_sale, self.power_cost, self.elec_cost]
         self.df_lst = ['power_sale', 'power_cost', 'elec_cost']
@@ -60,8 +73,19 @@ class soeModel:
 
         return self
 
-    def preprocessing_2(self, is_cost):
+    def preprocessing_2(self):
+        """
+        This method performs the second stage of preprocessing on the DataFrame.
+
+        :return: Returns the instance of the class with the preprocessed DataFrame.
+        """
+        if self.preprocessed:
+            return self
+        is_cost = False
+
         for i in self.df_lst:
+            if i == "power_cost" or i == "elec_cost":
+                is_cost = True
             df = eval('self.' + i)
             # column names reformatting
             df.loc[0] = df.loc[0].str.extract(r'(\d{4})', expand=False).fillna(method='ffill')
@@ -82,6 +106,7 @@ class soeModel:
             year_columns = [col for col in df.columns if re.search(r'\d{4}$', col)]
             new_column_names = {col: re.sub(r'\s*\d{4}\s*$', '', col) for col in df.columns}
             # Preprocessing translate to the time-series panel data
+            # Purpose is to be splittable afterwards
             for col in year_columns:
                 match = re.search(r'\d{4}', col)
                 year = match.group(0)
@@ -91,9 +116,8 @@ class soeModel:
                     df[col] = df['成本类别'] + '!' + df[col]
                 # if power sale
                 else:
-                    df[col] = df['电厂分类'] + '!' + df['电厂'] + '!' + df['所在电网'] + '!' + df['地理位置'] + '!' + \
-                              df[
-                                  col]
+                    df[col] = df['电厂分类'] + '!' + df['电厂'] + '!' + \
+                              df['所在电网'] + '!' + df['地理位置'] + '!' + df[col]
 
             # Drop and will be adding back afterward
             if is_cost:
@@ -118,10 +142,8 @@ class soeModel:
                 # Create an empty list to store values
                 values = []
 
-                # Loop through columns with the same name
-                for col in df.columns[df.columns == unique_col]:
-                    # Extend the values list with non-NaN values from the column
-                    values.extend(df[col].values.tolist())
+                # Extend the values list with non-NaN values from the column
+                values.extend(df[unique_col].values.tolist())
 
                 # Flatten the nested list
                 if len(values) != 1:
@@ -138,7 +160,8 @@ class soeModel:
                 if is_cost:
                     df[['成本类别', unique_col, '年份']] = df[unique_col].str.split('!', expand=True)
                 else:
-                    df[['电厂分类', '电厂', '所在电网', '地理位置', unique_col, '年份']] = df[unique_col].str.split('!', expand=True)
+                    df[['电厂分类', '电厂', '所在电网', '地理位置', unique_col, '年份']] = df[unique_col]. \
+                        str.split('!', expand=True)
 
             # let cost category as the first column
             if is_cost:
@@ -156,68 +179,82 @@ class soeModel:
 
             # Empty Values processing
             df.replace(['-', '/', '  -   ', ' – ', ''], np.nan, inplace=True)
+            df.replace({r'\n': ''}, regex=True, inplace=True)
 
+            # Update the corresponding class attribute - df
+            setattr(self, i, df)
+
+        self.preprocessed = True
         return self
 
-    def translate_cells(self, local_dict_name, local):
-        # store a local translation dict
-        try:
-            with open(local_dict_name, "r") as f:
-                translations_all = json.load(f)
-        except FileNotFoundError:
-            translations_all = {}
+    def translate_cells(self, local_dict_name=None, update=True):
+        """
+        Translates cells in the dataframe using a local dictionary or by performing translations.
 
-        # derive from local
-        if local:
-            for i in self.df_lst:
-                df = eval('self.' + i)
-                # update
-                df.replace(translations_all, inplace=True)
-                df.rename(columns=translations_all, inplace=True)
-            return self
+        :param local_dict_name: The local dictionary file in JSON format, mapping Chinese to English
+        :param update: If True, updates the local dictionary and performs translations as needed.
+                       If False, uses the local_dict_name directly without updating. Defaults to True.
+        :return: Returns the instance of the class with the translated cells.
+        """
+        # Load the local translation dict if the local_dict_name is provided
+        translations_all = {}
+        if local_dict_name is not None:
+            try:
+                with open(local_dict_name, "r") as f:
+                    translations_all = json.load(f)
+            except FileNotFoundError:
+                pass
 
+        # match digits
         regex = re.compile(r'^[-+]?\d{1,3}(?:,?\d{3})*(?:\.\d+)?$')
 
-        # else perform translate
         for i in self.df_lst:
-            df = eval('self.' + i)
+            df = getattr(self, i)
             translations = {}
             translator = Translator()
-            for column in df.columns:
-                if column not in translations_all:
-                    translations[column] = translator.translate(column).text.strip()
-                # unique elements of the column
-                # exclude numeric numbers
-                if '20' in column:
-                    continue
-                unique_elements = df[column].unique()
-                for element in unique_elements:
-                    if element in translations_all:
-                        continue
-                    # if digit types
-                    if regex.match(element):
-                        continue
-                    # add translation to the dictionary
-                    translations[element] = translator.translate(element).text.strip()
+            # changed if the dictionary need to be updated
+            if update:
+                for column in df.columns:
+                    if column not in translations_all:
+                        # translate column
+                        translated_text = translator.translate(column).text.strip()
+                        if translated_text.lower() != column.lower():
+                            translations[column] = translated_text
 
-            # update
-            df.replace(translations, inplace=True)
-            df.rename(columns=translations, inplace=True)
-            # df.columns = translate_list
+                    # Skip columns that contain only Digits values
+                    first_valid_index = df[column].first_valid_index()
+                    if first_valid_index is not None:
+                        check_item = df[column].iloc[first_valid_index]
+                        if (isinstance(check_item, str) and regex.match(check_item)) \
+                                or isinstance(check_item, (int, float, np.number)):
+                            continue
+
+                    unique_elements = df[column].unique()
+                    for element in unique_elements:
+                        if element in translations_all:
+                            continue
+                        if regex.match(element):
+                            continue
+                        translated_text = translator.translate(element).text.strip()
+                        if translated_text.lower() != element.lower():
+                            translations[element] = translated_text
+            # Update the local dictionary with the new translations
             translations_all.update(translations)
 
-        try:
-            with open(local_dict_name, "a") as f:
-                json.dump(translations_all, f)
-                f.write("\n")
-        except FileNotFoundError:
+            # Update the DataFrame with translations
+            df.replace(translations_all, inplace=True)
+            df.rename(columns=translations_all, inplace=True)
+            # Update the corresponding class attribute - df
+            setattr(self, i, df)
+
+        # Save the updated translations_all dictionary to the file
+        if local_dict_name is not None:
             with open(local_dict_name, "w") as f:
                 json.dump(translations_all, f)
 
         return self
 
     def correct_digital_type(self):
-
         name_pattern = r'^[A-Za-z\s]+$'
 
         for i in self.df_lst:
@@ -317,8 +354,10 @@ class soeModel:
 
         # lst2 = ((np.array(forecasted_gross_profit_lst) - np.array(sale_cost_lst)) / (
         #     np.array(forecasted_gross_profit_lst))).tolist()
-
-        lst2 = (np.array(lst1) / np.array(sale_cost_lst)).tolist()
+        forecasted_gross_profit_lst_copy = forecasted_gross_profit_lst.copy()  # create a copy of the original list
+        last_two_sum = sum(forecasted_gross_profit_lst_copy[-3:-1])
+        forecasted_gross_profit_lst_copy[-3:-1] = [last_two_sum, last_two_sum]
+        lst2 = (np.array(lst1) / np.array(forecasted_gross_profit_lst_copy)).tolist()
 
         data = {
             'Power Dispatched (TWh)': power_dispatch,
@@ -362,7 +401,129 @@ class soeModel:
             'Estimated Gross Revenue (RMB/MWh)': value2,
             'Estimated Sales Cost (Million RMB)': value3,
             'Gross Profit (Million RMB)': value2 - value3,
-            'Gross Profitability': (value2 - value3) / value3
+            'Gross Profitability': (value2 - value3) / value2
+        }
+        self.case = pd.DataFrame(case, index=['Reduced by ' + str(int(pct * 100)) + '%'])
+        self.case['Gross Profitability'] = self.case['Gross Profitability'].apply(lambda x: '{:.2%}'.format(x))
+        self.case = self.case.T
+
+        return table
+
+    def scenario2(self, types="power", pct=0.5, year=2020, coal_price=None,
+                  coal_power=True, coal_purchase=False, coal_transportation=False):
+        # Set index to 'years' if not already set
+        if self.power_sale.index.name != 'years':
+            self.power_sale.set_index('years', inplace=True)
+        if self.power_cost.index.name != 'years':
+            self.power_cost.set_index('years', inplace=True)
+        if self.elec_cost.index.name != 'years':
+            self.elec_cost.set_index('years', inplace=True)
+
+        electricity_sale_price = \
+            self.power_sale['Total electricity sales (100 million kWh)'][year] / \
+            self.power_sale['Total electricity sales (100 million kWh)'][year].sum() * \
+            self.power_sale['Electricity sales price (RMB/MWh)'][year]
+
+        # Estimated Sales Cost
+        sale_cost_lst = []
+        sale_cost = self.power_cost['Cost (RMB million)'][year].sum() - \
+                    self.power_cost[self.power_cost['cost category'] == 'Maintenance fees'][
+                        'Cost (RMB million)'][year].item() - \
+                    self.power_cost[self.power_cost['cost category'] == 'Other operating costs'][
+                        'Cost (RMB million)'][year].item() - \
+                    self.power_cost[self.power_cost['cost category'] == 'Electricity cost'][
+                        'Cost (RMB million)'][year].item()
+
+        sale_cost_lst.append(sale_cost)
+        coal_power_sc = self.elec_cost['Cost (RMB million)'][year].sum() - \
+                        self.elec_cost[self.elec_cost['cost category'] == 'Maintenance fees'][
+                            'Cost (RMB million)'][year].item()
+        sale_cost_lst.append(coal_power_sc)
+        sale_cost_lst.append(sale_cost - coal_power_sc)
+        sale_cost_lst.append(sale_cost - coal_power_sc)
+        sale_cost_lst.append(0)
+
+        group = self.power_sale.groupby(['years', 'Power Plant Classification'])
+        # checks if the first element of the MultiIndex (i.e., the year) matches the specified year.
+        group_filtered = group.filter(lambda x: x.name[0] == year)
+
+        coal_types_total = group.sum(numeric_only=True).loc[year]
+
+        power_dispatch = coal_types_total['Total electricity sales (100 million kWh)'].values.tolist()
+        total_sales = coal_types_total['Total electricity sales (100 million kWh)'].sum()
+        power_dispatch.insert(0, total_sales)
+
+        weighted_average_tariff = group_filtered.groupby('Power Plant Classification').apply(
+            lambda df: (
+                    df['Total electricity sales (100 million kWh)']
+                    / df['Total electricity sales (100 million kWh)'].sum()
+                    * df['Electricity sales price (RMB/MWh)']
+            ).sum()
+        ).values.tolist()
+        weighted_average_tariff.insert(0, electricity_sale_price.sum())
+
+        # Estimated Gross Revenue
+        forecasted_gross_profit = group_filtered.groupby('Power Plant Classification').apply(
+            lambda df: (
+                    df['Total electricity sales (100 million kWh)']
+                    * df['Electricity sales price (RMB/MWh)'] / 10
+            ).sum()
+        ).values.tolist()
+        forecasted_gross_profit.insert(0, sum(forecasted_gross_profit))
+
+        lst1 = (np.array(forecasted_gross_profit) - np.array(sale_cost_lst)).tolist()
+        lst1[2] = forecasted_gross_profit[2] + forecasted_gross_profit[3] - sale_cost_lst[2]
+        lst1[3] = lst1[2]
+
+        forecasted_gross_profit_lst_copy = forecasted_gross_profit.copy()  # create a copy of the original list
+        last_two_sum = sum(forecasted_gross_profit_lst_copy[-3:-1])
+        forecasted_gross_profit_lst_copy[-3:-1] = [last_two_sum, last_two_sum]
+        lst2 = (np.array(lst1) / np.array(forecasted_gross_profit_lst_copy)).tolist()
+
+        data = {
+            'Power Dispatched (TWh)': power_dispatch,
+            'Weighted Average Tariff (RMB/MWh)': weighted_average_tariff,
+            'Estimated Gross Revenue (RMB/MWh)': forecasted_gross_profit,
+            'Estimated Sales Cost (Million RMB)': sale_cost_lst,
+            'Gross Profit (Million RMB)': lst1,
+            'Gross Profitability': lst2
+        }
+        self.data = data
+
+        # case
+        table = pd.DataFrame(data)
+        table = table.drop(index=table.index[-1])
+        power_sources = ['All Power', 'Coal Power', 'Gas Power', 'Hydro Power']
+        table.set_index(pd.Index(power_sources), inplace=True)
+        table['Power Dispatched (TWh)'] = table['Power Dispatched (TWh)'] / 10
+        table['Gross Profitability'] = table['Gross Profitability'].apply(lambda x: '{:.2%}'.format(x))
+
+        unit_cost = self.elec_cost.set_index('cost category', append=True)['Unit cost (yuan/MWh)'][year][
+            'Raw materials, fuels and power']
+
+        if coal_price is not None:
+            if coal_price > table.loc['Coal Power', 'Weighted Average Tariff (RMB/MWh)']:
+                year_higher = year + 1
+                unit_cost = self.elec_cost.set_index('cost category', append=True)['Unit cost (yuan/MWh)'][year_higher][
+                    'Raw materials, fuels and power']
+            table['Weighted Average Tariff (RMB/MWh)'] = coal_price
+
+        # Estimated Revenue & Cost under different coal reduction scenario using specified year data
+        value2 = table['Power Dispatched (TWh)']['Coal Power'] * (1 - pct) * \
+                 table['Weighted Average Tariff (RMB/MWh)']['Coal Power']
+
+        value3 = table['Power Dispatched (TWh)']['Coal Power'] * (1 - pct) * unit_cost + \
+                 self.elec_cost.set_index('cost category', append=True)['Cost (RMB million)'][year]['Labor cost'] + \
+                 self.elec_cost.set_index('cost category', append=True)['Cost (RMB million)'][year][
+                     'Depreciation and amortization'] \
+                 + self.elec_cost.set_index('cost category', append=True)['Cost (RMB million)'][year]['other costs']
+        case = {
+            'Power Dispatched (TWh)': table['Power Dispatched (TWh)']['Coal Power'] * (1 - pct),
+            'Weighted Average Tariff (RMB/MWh)': table['Weighted Average Tariff (RMB/MWh)']['Coal Power'],
+            'Estimated Gross Revenue (RMB/MWh)': value2,
+            'Estimated Sales Cost (Million RMB)': value3,
+            'Gross Profit (Million RMB)': value2 - value3,
+            'Gross Profitability': (value2 - value3) / value2
         }
         self.case = pd.DataFrame(case, index=['Reduced by ' + str(int(pct * 100)) + '%'])
         self.case['Gross Profitability'] = self.case['Gross Profitability'].apply(lambda x: '{:.2%}'.format(x))
