@@ -15,7 +15,7 @@ class soeModel:
     # TODO: Debugs for the error
 
     # TODO: readable in the notebook.
-    # TODO: table, matrixc (varibles) over time (time series table over the years)
+    # TODO: table, matrix (variables) over time (time series table over the years)
 
     # TODO: Other SOEs.
     # TODO: updated CSVs in folder.
@@ -48,32 +48,10 @@ class soeModel:
 
 
         # self.df_lst = [self.power_sale, self.power_cost, self.elec_cost]
-        self.df_lst = ['power_sale', 'power_cost', 'elec_cost']
+        self.df_lst = ['power_sale', 'power_cost', 'elec_cost','coal_oper', 'coal_seg', 'coal_sale']
+        # self.df_lst = ['coal_oper', 'coal_seg', 'coal_sale']
 
     def preprocessing(self):
-        """
-        Preprocessing of the dataframe
-        :param df: pandas DataFrame
-        :return: preprocessed dataframe
-        """
-        for i in self.df_lst:
-            df = eval('self.' + i)
-            df.loc[0] = df.loc[0].fillna(method='ffill').fillna('')
-            df.columns = df.loc[0]
-            # power_sale = power_sale.drop(columns=['Remove'])
-            df.iloc[1] = df.iloc[1].str.replace('\n', ' ')
-            columns = df.iloc[1] + ' ' + df.iloc[0]
-            if i == "power_cost" or i == "elec_cost":
-                columns = columns.fillna('成本类别')
-            df.columns = columns
-            df.drop(index=[0, 1], inplace=True)
-            df.reset_index(drop=True, inplace=True)
-            # replace other symbol of None value to None
-            df.replace(['-', '/', '  -   ', ' – '], None, inplace=True)
-
-        return self
-
-    def preprocessing_2(self):
         """
         This method performs the second stage of preprocessing on the DataFrame.
 
@@ -84,23 +62,42 @@ class soeModel:
         is_cost = False
 
         for i in self.df_lst:
-            if i == "power_cost" or i == "elec_cost":
+            if i == "power_cost" or i == "elec_cost" or i == "coal_sale" or i == "coal_seg"\
+                                        or i == "coal_oper":
                 is_cost = True
             df = eval('self.' + i)
+            if i == "coal_oper":
+                row_to_insert = [np.nan, "(百万顿)", "(百万顿)"]
+                # Create a DataFrame for the row to be inserted
+                row_df = pd.DataFrame([row_to_insert], columns=df.columns, index=[1])
+                # Insert the row into the DataFrame
+                df = pd.concat([df.iloc[:1], row_df, df.iloc[1:]]).reset_index(drop=True)
+
             # column names reformatting
-            df.loc[0] = df.loc[0].str.extract(r'(\d{4})', expand=False).fillna(method='ffill')
+            df.loc[0] = df.loc[0].astype(str).str.extract(r'(\d{4})', expand=False).fillna(method='ffill')
             df = df.fillna('')
-            df.iloc[1] = df.iloc[1].str.replace('\n', ' ').str.strip()
+            df.iloc[1] = df.iloc[1].astype(str).str.replace('\n', ' ').str.strip()
+            # if i == "coal_oper":
+            #     columns = df.iloc[:, 0]
+            # else:
             columns = df.iloc[1] + ' ' + df.iloc[0]
 
             # if the data is a cost-related table
             if is_cost:
                 columns = columns.replace(' ', '成本类别')
+            # if i == "coal_oper":
+            #     columns = columns.replace('', 'years')
+            #     df = df.T
+            #     df.columns = columns
+            #     df = df.iloc[1:].reset_index(drop=True)
+            #     setattr(self, i, df)
+            #     continue
+
             df.columns = columns
 
             # drop the unnecessary rows
             df = df.iloc[2:].reset_index(drop=True)
-            df.columns = [col.strip() for col in df.columns]
+            df.columns = [str(col).strip() for col in df.columns]
 
             # Identify the columns containing a year in the first row
             year_columns = [col for col in df.columns if re.search(r'\d{4}$', col)]
@@ -115,9 +112,12 @@ class soeModel:
                 if is_cost:
                     df[col] = df['成本类别'] + '!' + df[col]
                 # if power sale
-                else:
+                elif i == "power_sale":
                     df[col] = df['电厂分类'] + '!' + df['电厂'] + '!' + \
                               df['所在电网'] + '!' + df['地理位置'] + '!' + df[col]
+                else:
+                    continue
+
 
             # Drop and will be adding back afterward
             if is_cost:
@@ -181,6 +181,12 @@ class soeModel:
             df.replace(['-', '/', '  -   ', ' – ', ''], np.nan, inplace=True)
             df.replace({r'\n': ''}, regex=True, inplace=True)
 
+            if i == "coal_seg":
+                df.rename(columns={"(百万元)": "cost"}, inplace=True)
+            if i == "coal_sale":
+                df.rename(columns={"成本类别": "sales"}, inplace=True)
+            if i == "coal_oper":
+                df.rename(columns={"成本类别": "产量"}, inplace=True)
             # Update the corresponding class attribute - df
             setattr(self, i, df)
 
@@ -260,6 +266,8 @@ class soeModel:
         for i in self.df_lst:
             df = eval('self.' + i)
             for col in df.columns:
+                if col == "sales":
+                    continue
                 try:
                     # Skip columns that contain only string values
                     check_index = 0
