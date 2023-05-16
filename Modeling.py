@@ -48,10 +48,10 @@ class soeModel:
 
 
         # self.df_lst = [self.power_sale, self.power_cost, self.elec_cost]
-        self.df_lst = ['power_sale', 'power_cost', 'elec_cost','coal_oper', 'coal_seg', 'coal_sale']
-        # self.df_lst = ['coal_oper', 'coal_seg', 'coal_sale']
+        # self.df_lst = ['power_sale', 'power_cost', 'elec_cost','coal_oper', 'coal_seg', 'coal_sale']
+        self.df_lst = ['coal_oper', 'coal_seg', 'coal_sale']
 
-    def preprocessing(self):
+    def preprocessing_2(self):
         """
         This method performs the second stage of preprocessing on the DataFrame.
 
@@ -292,9 +292,9 @@ class soeModel:
         return self
 
     def scenario(self, types="power", pct=0.5, year=2020, coal_price=None,
-                 coal_power=True, coal_purchase=False, coal_transportation=False):
+                  coal_power=True, coal_purchase=False, coal_transportation=False):
         """
-         Perform scenario tasks.
+        Perform scenario tasks.
 
         :param types: (str) Type of scenario to generate. Default is "power".
         :param pct: (float) Percentage reduction in the scenario compared to the current state. Default is 0.5.
@@ -305,120 +305,6 @@ class soeModel:
         :param coal_transportation: (bool) Indicates whether coal is being transported. Default is False.
         :return: (pandas.DataFrame) Scenario case dataframe.
         """
-
-        # if types == "power":
-        # All Power
-        year = str(year)
-        electricity_sale_price = \
-            self.power_sale['Total electricity sales (100 million kWh) ' + year] / \
-            self.power_sale['Total electricity sales (100 million kWh) ' + year].sum() * \
-            self.power_sale['Electricity Sales Price (RMB/MWh) ' + year]
-
-        # Estimated Sales Cost
-        sale_cost_lst = []
-        sale_cost = self.power_cost['Cost (RMB million) ' + year].sum() - \
-                    self.power_cost[self.power_cost['cost category'] == 'Maintenance fees'][
-                        'Cost (RMB million) ' + year].item() - \
-                    self.power_cost[self.power_cost['cost category'] == 'Other operating costs'][
-                        'Cost (RMB million) ' + year].item() - \
-                    self.power_cost[self.power_cost['cost category'] == 'Electricity cost'][
-                        'Cost (RMB million) ' + year].item()
-
-        sale_cost_lst.append(sale_cost)
-        coal_power_sc = self.elec_cost['Cost (RMB million) ' + year].sum() - \
-                        self.elec_cost[self.elec_cost['cost category'] == 'Maintenance fees'][
-                            'Cost (RMB million) 2020'].item()
-        sale_cost_lst.append(coal_power_sc)
-        sale_cost_lst.append(sale_cost - coal_power_sc)
-        sale_cost_lst.append(sale_cost - coal_power_sc)
-        sale_cost_lst.append(0)
-
-        group = self.power_sale.groupby('Power Plant Classification')[
-            ['Total electricity sales (100 million kWh) ' + year, 'Electricity Sales Price (RMB/MWh) ' + year]]
-
-        coal_types_total = group.apply(lambda df: (df.sum()))
-
-        power_dispatch = coal_types_total['Total electricity sales (100 million kWh) ' + year].values.tolist()
-        total_sales = coal_types_total['Total electricity sales (100 million kWh) ' + year].sum()
-        power_dispatch.insert(0, total_sales)
-
-        weighted_average_tariff = group.apply(lambda df: (df['Total electricity sales (100 million kWh) ' + year]
-                                                          / df[
-                                                              'Total electricity sales (100 million kWh) ' + year].sum()
-                                                          * df[
-                                                              'Electricity Sales Price (RMB/MWh) ' + year]).sum()
-                                              ).values.tolist()
-        weighted_average_tariff.insert(0, electricity_sale_price.sum())
-
-        forecasted_gross_profit = group.apply(lambda df: (df['Total electricity sales (100 million kWh) ' + year] *
-                                                          df['Electricity Sales Price (RMB/MWh) ' + year] / 10).sum()
-                                              )
-        forecasted_gross_profit_lst = forecasted_gross_profit.values.tolist()
-        forecasted_gross_profit_lst.insert(0, forecasted_gross_profit.sum())
-
-        lst1 = (np.array(forecasted_gross_profit_lst) - np.array(sale_cost_lst)).tolist()
-        lst1[2] = forecasted_gross_profit_lst[2] + forecasted_gross_profit_lst[3] - sale_cost_lst[2]
-        lst1[3] = lst1[2]
-
-        # lst2 = ((np.array(forecasted_gross_profit_lst) - np.array(sale_cost_lst)) / (
-        #     np.array(forecasted_gross_profit_lst))).tolist()
-        forecasted_gross_profit_lst_copy = forecasted_gross_profit_lst.copy()  # create a copy of the original list
-        last_two_sum = sum(forecasted_gross_profit_lst_copy[-3:-1])
-        forecasted_gross_profit_lst_copy[-3:-1] = [last_two_sum, last_two_sum]
-        lst2 = (np.array(lst1) / np.array(forecasted_gross_profit_lst_copy)).tolist()
-
-        data = {
-            'Power Dispatched (TWh)': power_dispatch,
-            'Weighted Average Tariff (RMB/MWh)': weighted_average_tariff,
-            'Estimated Gross Revenue (RMB/MWh)': forecasted_gross_profit_lst,
-            'Estimated Sales Cost (Million RMB)': sale_cost_lst,
-            'Gross Profit (Million RMB)': lst1,
-            'Gross Profitability': lst2
-        }
-        self.data = data
-
-        # case
-        table = pd.DataFrame(data)
-        table = table.drop(index=table.index[-1])
-        power_sources = ['All Power', 'Coal Power', 'Gas Power', 'Hydro Power']
-        table.set_index(pd.Index(power_sources), inplace=True)
-        table['Power Dispatched (TWh)'] = table['Power Dispatched (TWh)'] / 10
-        table['Gross Profitability'] = table['Gross Profitability'].apply(lambda x: '{:.2%}'.format(x))
-
-        unit_cost = self.elec_cost.set_index('cost category')['Unit cost (yuan/MWh) in ' + year][
-            'Raw materials, fuels and power']
-        if coal_price is not None:
-            if coal_price > table.loc['Coal Power', 'Weighted Average Tariff (RMB/MWh)']:
-                year_higher = '2021'
-                unit_cost = self.elec_cost.set_index('cost category')['Unit cost (yuan/MWh) in ' + year_higher][
-                    'Raw materials, fuels and power']
-            table['Weighted Average Tariff (RMB/MWh)'] = coal_price
-
-        # Estimated Revenue& Cost under different coal reduction scenario using 2020 data
-        value2 = table['Power Dispatched (TWh)']['Coal Power'] * (1 - pct) * \
-                 table['Weighted Average Tariff (RMB/MWh)']['Coal Power']
-
-        value3 = table['Power Dispatched (TWh)']['Coal Power'] * (1 - pct) * unit_cost + \
-                 self.elec_cost.set_index('cost category')['Cost (RMB million) ' + year]['Labor cost'] + \
-                 self.elec_cost.set_index('cost category')['Cost (RMB million) ' + year][
-                     'Depreciation and amortization'] \
-                 + self.elec_cost.set_index('cost category')['Cost (RMB million) ' + year]['other costs']
-        case = {
-            'Power Dispatched (TWh)': table['Power Dispatched (TWh)']['Coal Power'] * (1 - pct),
-            'Weighted Average Tariff (RMB/MWh)': table['Weighted Average Tariff (RMB/MWh)']['Coal Power'],
-            'Estimated Gross Revenue (RMB/MWh)': value2,
-            'Estimated Sales Cost (Million RMB)': value3,
-            'Gross Profit (Million RMB)': value2 - value3,
-            'Gross Profitability': (value2 - value3) / value2
-        }
-        self.case = pd.DataFrame(case, index=['Reduced by ' + str(int(pct * 100)) + '%'])
-        self.case['Gross Profitability'] = self.case['Gross Profitability'].apply(lambda x: '{:.2%}'.format(x))
-        self.case = self.case.T
-
-        return table
-
-    def scenario2(self, types="power", pct=0.5, year=2020, coal_price=None,
-                  coal_power=True, coal_purchase=False, coal_transportation=False):
         # Set index to 'years' if not already set
         if self.power_sale.index.name != 'years':
             self.power_sale.set_index('years', inplace=True)
