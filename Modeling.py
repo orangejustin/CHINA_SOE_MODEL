@@ -22,16 +22,17 @@ class soeModel:
 
     def __init__(self):
         """
-        upload raw data
+        upload raw data & initialization
         """
         # coal types
         self.preprocessed = False
         self.translated = False
         self.correct = False
 
-        power_sale = "raw data/Power Sale.csv"
-        power_cost = "raw data/Power Costs.csv"
-        elec_cost = "raw data/Electricity Costs.csv"
+        # by coal power
+        power_sale = "raw data 2/Power Sale.csv"
+        power_cost = "raw data 2/Power Costs.csv"
+        elec_cost = "raw data 2/Electricity Costs.csv"
         # by coal types
         coal_oper = "raw data/Coal Operation Data.csv"
         coal_seg = "raw data/Coal segment operating costs.csv"
@@ -40,32 +41,37 @@ class soeModel:
         self.power_sale = pd.read_csv(power_sale, header=None)
         self.power_cost = pd.read_csv(power_cost, header=None)
         self.elec_cost = pd.read_csv(elec_cost, header=None)
-        # new
         self.coal_oper = pd.read_csv(coal_oper, header=None)
         self.coal_seg = pd.read_csv(coal_seg, header=None)
         self.coal_sale = pd.read_csv(coal_sale, header=None)
 
-
-
         # self.df_lst = [self.power_sale, self.power_cost, self.elec_cost]
-        # self.df_lst = ['power_sale', 'power_cost', 'elec_cost','coal_oper', 'coal_seg', 'coal_sale']
-        self.df_lst = ['coal_oper', 'coal_seg', 'coal_sale']
+        self.df_lst = ['power_sale', 'power_cost', 'elec_cost', 'coal_oper', 'coal_seg', 'coal_sale']
+        self.data = None
+        self.case = None
 
-    def preprocessing_2(self):
+    def preprocessing(self):
         """
         This method performs the second stage of preprocessing on the DataFrame.
 
         :return: Returns the instance of the class with the preprocessed DataFrame.
         """
+        pd.set_option('mode.chained_assignment', None)
+
         if self.preprocessed:
             return self
         is_cost = False
 
         for i in self.df_lst:
-            if i == "power_cost" or i == "elec_cost" or i == "coal_sale" or i == "coal_seg"\
-                                        or i == "coal_oper":
+            # if is cost type format
+            if i == "power_cost" or i == "elec_cost" or i == "coal_sale" or i == "coal_seg" \
+                    or i == "coal_oper":
                 is_cost = True
+
             df = eval('self.' + i)
+            if i == "power_sale":
+                df.at[0, 0] = np.nan
+                df = df[df[0] != '燃煤电厂合计/加权平均']
             if i == "coal_oper":
                 row_to_insert = [np.nan, "(百万顿)", "(百万顿)"]
                 # Create a DataFrame for the row to be inserted
@@ -77,21 +83,12 @@ class soeModel:
             df.loc[0] = df.loc[0].astype(str).str.extract(r'(\d{4})', expand=False).fillna(method='ffill')
             df = df.fillna('')
             df.iloc[1] = df.iloc[1].astype(str).str.replace('\n', ' ').str.strip()
-            # if i == "coal_oper":
-            #     columns = df.iloc[:, 0]
-            # else:
+
             columns = df.iloc[1] + ' ' + df.iloc[0]
 
             # if the data is a cost-related table
             if is_cost:
                 columns = columns.replace(' ', '成本类别')
-            # if i == "coal_oper":
-            #     columns = columns.replace('', 'years')
-            #     df = df.T
-            #     df.columns = columns
-            #     df = df.iloc[1:].reset_index(drop=True)
-            #     setattr(self, i, df)
-            #     continue
 
             df.columns = columns
 
@@ -116,8 +113,7 @@ class soeModel:
                     df[col] = df['电厂分类'] + '!' + df['电厂'] + '!' + \
                               df['所在电网'] + '!' + df['地理位置'] + '!' + df[col]
                 else:
-                    continue
-
+                    return "Not available right now"
 
             # Drop and will be adding back afterward
             if is_cost:
@@ -125,12 +121,14 @@ class soeModel:
             else:
                 df.drop(['电厂分类', '电厂', '所在电网', '地理位置'], axis=1, inplace=True)
 
-            # Rename the cok
+            # Rename the col
             df.rename(columns=new_column_names, inplace=True)
             # Drop the unnecessary columns
             if not is_cost:
-                df.drop(['预测毛利润 (百万元)', '计算I38中的加权平均售电电价', '计算Q38中的加权平均售电电价'], axis=1,
+                df.drop(['预测毛利润 (百万元)', '计算I38中的加权平均售电电价', '计算Q38中的加权平均售电电价',
+                         '总发电量 (亿千瓦时)', '平均利用小时 (小时)', '售电标准煤耗 (克/千瓦时)'], axis=1,
                         inplace=True)
+
             # Get unique column names
             unique_columns = df.columns.unique()
 
@@ -186,7 +184,7 @@ class soeModel:
             if i == "coal_sale":
                 df.rename(columns={"成本类别": "sales"}, inplace=True)
             if i == "coal_oper":
-                df.rename(columns={"成本类别": "产量"}, inplace=True)
+                df.rename(columns={"成本类别": "煤炭产量"}, inplace=True)
             # Update the corresponding class attribute - df
             setattr(self, i, df)
 
@@ -291,21 +289,62 @@ class soeModel:
 
         return self
 
-    def scenario(self, types="power", pct=0.5, year=2020, coal_price=None,
-                  coal_power=True, coal_purchase=False, coal_transportation=False):
+    def fill_na(self):
+        for i in :
+            df = df.fillna(0)
+
+    def scenario(self, types="coal power", pct=0.5, year=2020, coal_price=None,
+                 coal_purchase=False, coal_transportation=False,
+                 reduce_self_produced=False, reduce_purchased=False, cut_purchased_coal=False):
         """
         Perform scenario tasks.
 
-        :param types: (str) Type of scenario to generate. Default is "power".
+        :param types: (str) Type of scenario to generate. Default is "coal power".
         :param pct: (float) Percentage reduction in the scenario compared to the current state. Default is 0.5.
         :param year: (int) Year for which the scenario is generated. Default is 2020.
-        :param coal_price: (float) Price of coal. Default is None from the 2020. #TODO (same as the year)
-        :param coal_power: (bool) Indicates whether coal power is being used. Default is True.
+        :param coal_price: (float) Price of coal. Default is None from the 2020.
         :param coal_purchase: (bool) Indicates whether coal is being purchased. Default is False.
         :param coal_transportation: (bool) Indicates whether coal is being transported. Default is False.
+        :param reduce_purchased: TODO
+        :param reduce_self_produced: TODO
+        :param cut_purchased_coal: TODO
         :return: (pandas.DataFrame) Scenario case dataframe.
         """
-        # Set index to 'years' if not already set
+        if types == "coal power":
+            data = self.power(year)
+            self.data = data
+            # case
+            table = self.power_case(data, year, coal_price, pct)
+        elif types == "coal types":
+            data = self.types(year)
+            self.data = data
+            table = self.types_case(data, coal_price, pct, reduce_self_produced,
+                                    reduce_purchased, cut_purchased_coal)
+            table = table
+        else:
+            return None
+
+        return table
+
+    def power(self, year):
+        """
+        This method calculates the various power and cost attributes for a given year.
+
+        Parameters:
+        year (int): The year for which the calculations need to be made.
+
+        Returns:
+        dict: A dictionary with calculated power attributes such as 'Power Dispatched (TWh)', 'Weighted Average Tariff (RMB/MWh)',
+              'Estimated Gross Revenue (RMB/MWh)', 'Estimated Sales Cost (Million RMB)', 'Gross Profit (Million RMB)',
+              and 'Gross Profitability'.
+        """
+
+        # constant variables
+        included_wind = 4
+        included_solar = 5
+        custom_order = ['coal burning', 'gas', 'hydropower']
+
+        # set index to 'years' if not already set
         if self.power_sale.index.name != 'years':
             self.power_sale.set_index('years', inplace=True)
         if self.power_cost.index.name != 'years':
@@ -313,6 +352,7 @@ class soeModel:
         if self.elec_cost.index.name != 'years':
             self.elec_cost.set_index('years', inplace=True)
 
+        # calculate electricity_sale_price
         electricity_sale_price = \
             self.power_sale['Total electricity sales (100 million kWh)'][year] / \
             self.power_sale['Total electricity sales (100 million kWh)'][year].sum() * \
@@ -320,6 +360,8 @@ class soeModel:
 
         # Estimated Sales Cost
         sale_cost_lst = []
+
+        # All Power
         sale_cost = self.power_cost['Cost (RMB million)'][year].sum() - \
                     self.power_cost[self.power_cost['cost category'] == 'Maintenance fees'][
                         'Cost (RMB million)'][year].item() - \
@@ -329,65 +371,137 @@ class soeModel:
                         'Cost (RMB million)'][year].item()
 
         sale_cost_lst.append(sale_cost)
+
+        # Coal Power: all cost - Maintenance fees (维修费)
         coal_power_sc = self.elec_cost['Cost (RMB million)'][year].sum() - \
                         self.elec_cost[self.elec_cost['cost category'] == 'Maintenance fees'][
                             'Cost (RMB million)'][year].item()
+
+        print(sale_cost)
         sale_cost_lst.append(coal_power_sc)
-        sale_cost_lst.append(sale_cost - coal_power_sc)
-        sale_cost_lst.append(sale_cost - coal_power_sc)
-        sale_cost_lst.append(0)
+
+        # other variable cost: all sale cost - coal power cost
+        other_cost = sale_cost - coal_power_sc
 
         group = self.power_sale.groupby(['years', 'Power Plant Classification'])
+
         # checks if the first element of the MultiIndex (i.e., the year) matches the specified year.
         group_filtered = group.filter(lambda x: x.name[0] == year)
-
         coal_types_total = group.sum(numeric_only=True).loc[year]
 
+        # define the custom order
+        if len(coal_types_total) == included_wind:
+            custom_order = ['coal burning', 'gas', 'hydropower', 'wind energy']
+        if len(coal_types_total) == included_solar:
+            custom_order = ['coal burning', 'gas', 'hydropower', 'wind energy', 'Photovoltaic']
+
+        # for additional all power needs plus one
+        diff = len(coal_types_total) - len(sale_cost_lst) + 1
+        sale_cost_lst = np.append(sale_cost_lst, [other_cost] * diff)
+
+        # reindex based on custom order
+        coal_types_total = coal_types_total.reindex(custom_order)
+
+        # calculate power dispatch
         power_dispatch = coal_types_total['Total electricity sales (100 million kWh)'].values.tolist()
         total_sales = coal_types_total['Total electricity sales (100 million kWh)'].sum()
         power_dispatch.insert(0, total_sales)
 
+        # calculate weighted_average_tariff
         weighted_average_tariff = group_filtered.groupby('Power Plant Classification').apply(
             lambda df: (
                     df['Total electricity sales (100 million kWh)']
                     / df['Total electricity sales (100 million kWh)'].sum()
                     * df['Electricity sales price (RMB/MWh)']
             ).sum()
-        ).values.tolist()
+        )
+
+        # reorders the dataframe
+        weighted_average_tariff = weighted_average_tariff.reindex(custom_order)
+        weighted_average_tariff = weighted_average_tariff.values.tolist()
+
+        # includes total electricity sale price
         weighted_average_tariff.insert(0, electricity_sale_price.sum())
 
         # Estimated Gross Revenue
-        forecasted_gross_profit = group_filtered.groupby('Power Plant Classification').apply(
+        forecasted_gross_revenue = group_filtered.groupby('Power Plant Classification').apply(
             lambda df: (
                     df['Total electricity sales (100 million kWh)']
                     * df['Electricity sales price (RMB/MWh)'] / 10
             ).sum()
-        ).values.tolist()
-        forecasted_gross_profit.insert(0, sum(forecasted_gross_profit))
+        )
 
-        lst1 = (np.array(forecasted_gross_profit) - np.array(sale_cost_lst)).tolist()
-        lst1[2] = forecasted_gross_profit[2] + forecasted_gross_profit[3] - sale_cost_lst[2]
-        lst1[3] = lst1[2]
+        # reorder the dataframe
+        forecasted_gross_revenue = forecasted_gross_revenue.reindex(custom_order)
+        forecasted_gross_revenue = forecasted_gross_revenue.values.tolist()
 
-        forecasted_gross_profit_lst_copy = forecasted_gross_profit.copy()  # create a copy of the original list
-        last_two_sum = sum(forecasted_gross_profit_lst_copy[-3:-1])
-        forecasted_gross_profit_lst_copy[-3:-1] = [last_two_sum, last_two_sum]
-        lst2 = (np.array(lst1) / np.array(forecasted_gross_profit_lst_copy)).tolist()
+        # include total forecasted_gross_revenue sale price
+        forecasted_gross_revenue.insert(0, sum(forecasted_gross_revenue))
+
+        gross_profit = (np.array(forecasted_gross_revenue) - np.array(sale_cost_lst)).tolist()
+        other_sale_cost = forecasted_gross_revenue[2] + forecasted_gross_revenue[3] - sale_cost_lst[2]
+        gross_profit[2:] = [other_sale_cost] * diff
+
+        # defines as All Power, Coal Power and all other types
+        forecasted_gross_revenue_copy = forecasted_gross_revenue.copy()  # create a copy of the original list
+        other_revenue = sum(forecasted_gross_revenue[2:])
+        forecasted_gross_revenue_copy[2:] = [other_revenue] * diff
+
+        # calculates gross_profitability
+        with np.errstate(divide='ignore', invalid='ignore'):
+            gross_profitability = (np.array(gross_profit) / np.array(forecasted_gross_revenue_copy))
+
+        # Change any NaNs or Infs (which could occur from division by zero) to 0
+        gross_profitability[~np.isfinite(gross_profitability)] = 0
+        gross_profitability = gross_profitability.tolist()
 
         data = {
             'Power Dispatched (TWh)': power_dispatch,
             'Weighted Average Tariff (RMB/MWh)': weighted_average_tariff,
-            'Estimated Gross Revenue (RMB/MWh)': forecasted_gross_profit,
+            'Estimated Gross Revenue (RMB/MWh)': forecasted_gross_revenue,
             'Estimated Sales Cost (Million RMB)': sale_cost_lst,
-            'Gross Profit (Million RMB)': lst1,
-            'Gross Profitability': lst2
+            'Gross Profit (Million RMB)': gross_profit,
+            'Gross Profitability': gross_profitability
         }
-        self.data = data
 
-        # case
+        return data
+
+    def power_case(self, data, year, coal_price, pct):
+        """
+        This function is used to generate a report of a power case in a given year.
+
+        :param data: The input data which is expected to be a DataFrame including 'Power Dispatched (TWh)', 'Weighted Average Tariff (RMB/MWh)',
+                     'Estimated Gross Revenue (RMB/MWh)', 'Estimated Sales Cost (Million RMB)', and 'Gross Profitability' columns.
+        :param year: The year when the power case takes place. It is used to align with data of unit cost and electric cost.
+        :param coal_price: The coal price for the power case. If it's provided and higher than the current Weighted Average Tariff for Coal Power,
+                           the function will update the unit cost and Weighted Average Tariff in the table.
+        :param pct: The percentage of the power that is reduced in the case.
+
+        :return: The updated DataFrame which includes the power case situation.
+
+        The function does the following:
+
+        - Checks the number of power sources and defines them accordingly.
+        - Sets rows with 'Estimated Gross Revenue (RMB/MWh)' of 0 to all 0.
+        - Adjusts the unit cost if a coal_price is provided and it's higher than the current Weighted Average Tariff for Coal Power.
+        - Calculates the Estimated Revenue & Cost under different coal reduction scenarios using the specified year data.
+        - Adds the scenario into a case and formats the 'Gross Profitability' as a percentage.
+        """
         table = pd.DataFrame(data)
-        table = table.drop(index=table.index[-1])
-        power_sources = ['All Power', 'Coal Power', 'Gas Power', 'Hydro Power']
+        included_wind = 5
+        included_solar = 6
+
+        # set entire row to 0 if 'Estimated Gross Revenue (RMB/MWh)' is 0
+        table.loc[table['Estimated Gross Revenue (RMB/MWh)'] == 0] = 0
+
+        if table.shape[0] == included_wind:
+            power_sources = ['All Power', 'Coal Power', 'Gas Power', 'Hydro Power', 'wind']
+        elif table.shape[0] == included_solar:
+            power_sources = ['All Power', 'Coal Power', 'Gas Power', 'Hydro Power', 'wind', 'Photovoltaic']
+        else:
+            power_sources = ['All Power', 'Coal Power', 'Gas Power', 'Hydro Power']
+
+
         table.set_index(pd.Index(power_sources), inplace=True)
         table['Power Dispatched (TWh)'] = table['Power Dispatched (TWh)'] / 10
         table['Gross Profitability'] = table['Gross Profitability'].apply(lambda x: '{:.2%}'.format(x))
@@ -395,11 +509,13 @@ class soeModel:
         unit_cost = self.elec_cost.set_index('cost category', append=True)['Unit cost (yuan/MWh)'][year][
             'Raw materials, fuels and power']
 
+        # if we set up a coal price
         if coal_price is not None:
+            # if that coal_price is higher than Weighted Average
             if coal_price > table.loc['Coal Power', 'Weighted Average Tariff (RMB/MWh)']:
                 year_higher = year + 1
-                unit_cost = self.elec_cost.set_index('cost category', append=True)['Unit cost (yuan/MWh)'][year_higher][
-                    'Raw materials, fuels and power']
+                unit_cost = self.elec_cost.set_index('cost category', append=True)['Unit cost (yuan/MWh)'] \
+                    [year_higher]['Raw materials, fuels and power']
             table['Weighted Average Tariff (RMB/MWh)'] = coal_price
 
         # Estimated Revenue & Cost under different coal reduction scenario using specified year data
@@ -411,6 +527,7 @@ class soeModel:
                  self.elec_cost.set_index('cost category', append=True)['Cost (RMB million)'][year][
                      'Depreciation and amortization'] \
                  + self.elec_cost.set_index('cost category', append=True)['Cost (RMB million)'][year]['other costs']
+
         case = {
             'Power Dispatched (TWh)': table['Power Dispatched (TWh)']['Coal Power'] * (1 - pct),
             'Weighted Average Tariff (RMB/MWh)': table['Weighted Average Tariff (RMB/MWh)']['Coal Power'],
@@ -424,3 +541,148 @@ class soeModel:
         self.case = self.case.T
 
         return table
+
+    def types(self, year):
+        """
+        Gross Revenue = Sales Volume * Average Coal Price
+        Gross Profit = Gross Revenue - Sales Cost
+        Sales Cost = Purchased Coal Sales Cost + Self-produced Coal Sales Cost
+        Purchased Coal Sales Cost = Purchase Volumn * (Unit Purchase Cost + Unit Transportation Cost)
+        Self-produced Coal Sales Cost = Fixed Cost + Self-produce Volume *
+                                                        (Unit Material Cost + Unit Transportation Cost)
+        Fixed cost = personnel + depreciations + other production cost
+
+        :param year: the year we want to explore the analysis on
+        :return: a dictionary contains sales_volume, average_coal_price, gross_revenue,
+                                       estimated_sales_cost, gross_profit, and gross_profitability
+        """
+        # Set index to 'years' if not already set
+        if self.coal_oper.index.name != 'years':
+            self.coal_oper.set_index('years', inplace=True)
+        if self.coal_seg.index.name != 'years':
+            self.coal_seg.set_index('years', inplace=True)
+        if self.coal_sale.index.name != 'years':
+            self.coal_sale.set_index('years', inplace=True)
+
+        data = {
+            'sales_volume': [],
+            'average_coal_price': [],
+            'gross_revenue': [],
+            'estimated_sales_cost': [],
+            'gross_profit': [],
+            'gross_profitability': []
+        }
+
+        # 运输(单位成本) = 运输成本 / 煤炭销售量
+        transportation_unit = self.coal_seg[self.coal_seg['cost category'] == 'transportation cost']['cost'][year] / \
+                              self.coal_oper[self.coal_oper['coal production'] == 'coal sales'][
+                                  'Metrics (Millions of tons)'][year]
+        self.transportation_unit = transportation_unit
+
+        # 燃料(单位成本) = 原材料、燃料及动力 / 自产煤
+        fuel_unit = self.coal_seg[self.coal_seg['cost category'] == 'Raw materials, fuels and power']['cost'][year] / \
+                    self.coal_oper[self.coal_oper['coal production'] == 'self-produced coal'][
+                        'Metrics (Millions of tons)'][year]
+        self.fuel_unit = fuel_unit
+
+        # 外购煤(单位采购成本) = 外购煤成本 / 外购煤
+        purchased_coal_unit = self.coal_seg[self.coal_seg['cost category'] == 'Purchased coal cost']['cost'][year] / \
+                              self.coal_oper[self.coal_oper['coal production'] == 'purchased coal'][
+                                  'Metrics (Millions of tons)'][year]
+        self.purchased_coal_unit = purchased_coal_unit
+
+        # 自产煤固定成本 = 人工成本 + 折旧及摊销 + 其他成本
+        fixed_cost_of_self_produced_coal = 0
+        for i in ['Labor cost', 'Depreciation and amortization', 'other costs']:
+            fixed_cost_of_self_produced_coal += self.coal_seg[self.coal_seg['cost category'] == i]['cost'][year]
+            self.fixed_cost_of_self_produced_coal = fixed_cost_of_self_produced_coal
+
+        # replicate table: 2020's estimated sales revenue & cost by coal types
+        for i in ['coal sales', 'self-produced coal', 'purchased coal']:
+            data['sales_volume'].append(
+                self.coal_oper[self.coal_oper['coal production'] == i]['Metrics (Millions of tons)'][year])
+            data['average_coal_price'].append(self.coal_sale[self.coal_sale['sales'] == 'i. Domestic sales']
+                                              ['Price (excluding tax) (yuan/ton)'][year])
+            if i == 'self-produced coal':
+                temp_value = data['sales_volume'][1] * (
+                        transportation_unit + fuel_unit) + fixed_cost_of_self_produced_coal
+                data['estimated_sales_cost'].append(temp_value)
+
+            if i == 'purchased coal':
+                temp_value = data['sales_volume'][2] * (transportation_unit + purchased_coal_unit)
+                data['estimated_sales_cost'].append(temp_value)
+
+        data['gross_revenue'] = (np.array(data['sales_volume']) * np.array(data['average_coal_price'])).tolist()
+        data['estimated_sales_cost'].insert(0, sum(data['estimated_sales_cost']))
+        data['gross_profit'] = (np.array(data['gross_revenue']) - np.array(data['estimated_sales_cost'])).tolist()
+        data['gross_profitability'] = (np.array(data['gross_profit']) / np.array(data['gross_revenue'])).tolist()
+
+        return data
+
+    def types_case(self, data, coal_price, pct, reduce_self_produced, reduce_purchased, cut_purchased_coal):
+        # initialize columns values
+        self.case = {
+            'self_produced_coal_volume': None,
+            'purchased_coal_volume': None,
+            'total_coal_volume': None,
+            'average_coal_price': None,
+            'sales_revenue': None,
+            'sales_cost': None,
+            'gross_sales_profit': None,
+            'gross_profitability': None
+        }
+
+        # Insert a space before all caps, then remove the leading space on the first word
+        new_data = {re.sub(r"(?<=\w)([A-Z])", r" \1", key).title().replace('_', ' '): value
+                    for key, value in data.items()}
+        # replicate 2020's estimated sales revenue & cost by coal types
+        table = pd.DataFrame(new_data)
+        coal_sources = ['coal sales', 'self-produced coal', 'purchased coal']
+        table.set_index(pd.Index(coal_sources), inplace=True)
+        table['Gross Profitability'] = table['Gross Profitability'].apply(lambda x: '{:.2%}'.format(x))
+
+        # Cases: Reduced Self-produced/Purchased/or both Coal by 50%
+        self.reduce_coal_volumes(table, pct, reduce_self_produced, reduce_purchased, cut_purchased_coal)
+
+        self.case['total_coal_volume'] = self.case['self_produced_coal_volume'] + self.case['purchased_coal_volume']
+        if coal_price is None:
+            self.case['average_coal_price'] = table['Average Coal Price']['coal sales']
+        else:
+            self.case['average_coal_price'] = coal_price
+
+        self.case['sales_revenue'] = self.case['average_coal_price'] * self.case['total_coal_volume']
+        self.case['sales_cost'] = self.fixed_cost_of_self_produced_coal \
+                                  + self.case['total_coal_volume'] * self.transportation_unit \
+                                  + self.purchased_coal_unit * self.case['purchased_coal_volume'] \
+                                  + self.fuel_unit * self.case['self_produced_coal_volume']
+        self.case['gross_sales_profit'] = self.case['sales_revenue'] - self.case['sales_cost']
+        self.case['gross_profitability'] = self.case['gross_sales_profit'] / self.case['sales_revenue']
+        self.case['gross_profitability'] = '{:.2%}'.format(self.case['gross_profitability'])
+        self.case = {re.sub(r"(?<=\w)([A-Z])", r" \1", key).title().replace('_', ' '): value
+                     for key, value in self.case.items()}
+        self.case = pd.DataFrame(self.case, index=['Reduced by ' + str(int(pct * 100)) + '%'])
+        self.case = self.case.T
+        return table
+
+    def reduce_coal_volumes(self, table, pct, reduce_self_produced=False, reduce_purchased=False,
+                            cut_purchased_coal=False):
+        # unchanged of purchased_coal_volume
+        self.case['purchased_coal_volume'] = table['Sales Volume']['purchased coal']
+        # unchanged of self_produced_coal_volume
+        self.case['self_produced_coal_volume'] = table['Sales Volume']['self-produced coal']
+        if cut_purchased_coal:
+            result = table['Sales Volume']['purchased coal'] - 0.5 * table['Sales Volume']['coal sales']
+            self.case['purchased_coal_volume'] = max(result, 0)
+            if self.case['purchased_coal_volume'] == 0:
+                self.case['self_produced_coal_volume'] = table['Sales Volume']['self-produced coal'] - \
+                                                         (0.5 * table['Sales Volume']['coal sales'] -
+                                                          table['Sales Volume']['purchased coal'])
+            else:
+                self.case['self_produced_coal_volume'] = table['Sales Volume']['self-produced coal']
+            return self
+        if reduce_self_produced:
+            self.case['self_produced_coal_volume'] = table['Sales Volume']['self-produced coal'] * pct
+        if reduce_purchased:
+            self.case['purchased_coal_volume'] = table['Sales Volume']['purchased coal'] * pct
+
+        return self
